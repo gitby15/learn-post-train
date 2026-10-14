@@ -1,0 +1,19 @@
+[project]
+name = "learn-post-train"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate>=1.15.0",
+    "datasets>=5.1.0",
+    "torch>=2.14.0",
+    "transformers>=5.19.0",
+]
+
+[project.scripts]
+learn-post-train = "learn_post_train:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
