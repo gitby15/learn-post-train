@@ -4,20 +4,20 @@ from torch.utils.data import DataLoader
 
 from learn_post_train.model.bert import load_model
 from learn_post_train.model.tokenizer import load_tokenizer
-from learn_post_train.dataset.civil_comment import CivilDecisionDataset
-from learn_post_train.dataset.data_collator import MultiDecisionCollator
+from learn_post_train.dataset.tiny_test import TinyDecisionDataset, TinyCollector
 
+
+# 使用tiny_test来测试循环是否能跑通
 def smoke_test():
 
-    dataset = CivilDecisionDataset()
-
+    dataset = TinyDecisionDataset()
     tokenizer = load_tokenizer()
 
     loader = DataLoader(
         dataset,
         batch_size=4,
         shuffle=False,
-        collate_fn=MultiDecisionCollator(tokenizer),
+        collate_fn=TinyCollector(tokenizer),
     )
 
     device = torch.device(
@@ -26,9 +26,9 @@ def smoke_test():
 
     model = load_model().to(device)
     model.train()
-    print("start to train")
 
     batch = next(iter(loader))
+    print("=== batch ===", batch)
     batch = {
         key: value.to(device)
         for key, value in batch.items()

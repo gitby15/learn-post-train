@@ -1,51 +1,46 @@
-'''
-# Civil的数据长这样：
-{
-    "text": "You are an idiot.", # 文本内容
-    "toxicity": 0.92,            # 总体判断，这个text是不是有害言论
-    "insult": 0.85,              # 侮辱性评分
-    "identity_attack": 0.02,     # 人身攻击评分
-    "threat": 0.01,              # 恐吓评分
-    "obscene": 0.04,             # 猥亵评分
-}
-'''
-
-import math
-
-from datasets import load_dataset
 import random
+
 import torch
+from datasets import load_dataset
 from torch.utils.data import Dataset
 
-from learn_post_train.model.tokenizer import build_input
-
-def get_train_dataset():
-    dataset = load_dataset("google/civil_comments")
-    return dataset['train']
-
-def get_test_dataset():
-    dataset = load_dataset("google/civil_comments")
-    return dataset['test']
+from learn_post_train.dataset.common import TEST_QUESTION_MAP, TRAIN_QUESTIONS_MAP
 
 
+def get_dataset(split: str = 'test', sort: bool = True):
+    if split not in ['test', 'train', 'validation']:
+        raise ValueError(f"split must be one of ['test', 'train', 'validation'], but got {split}")
+    dataset = load_dataset("google/civil_comments")[split]
+
+    if split == 'validation':
+        dataset = dataset.take(1000)
+
+    if sort:
+        dataset = dataset.map(
+            lambda batch: {"text_length": [len(text) for text in batch["text"]]},
+            batched=True,
+        )
+        dataset = dataset.sort("text_length", reverse=True).remove_columns("text_length")
+    return dataset
 
 
-QUESTIONS_MAP = {
-    'toxicity': "Is this a toxic message?",
-    'insult': "Is this an insult?",
-    'identity_attack': "Is this an identity attack?",
-    'threat': "Is this a threat?",
-    'obscene': "Is this obscene?",
-}
-LABEL_NAMES = list(QUESTIONS_MAP.keys())
 
 
-class CivilDecisionDataset(Dataset):
-    def __init__(self, type='train'):
-        if type == 'train':
-            self.dataset = get_train_dataset()
+
+LABEL_NAMES = list(TRAIN_QUESTIONS_MAP.keys())
+
+
+class CivilCommentDataset(Dataset):
+    def __init__(self, split="train"):
+        self.dataset = get_dataset(split)
+        
+        if split == 'test':
+            self.labels = TEST_QUESTION_MAP.keys()
+            self.question_map = TEST_QUESTION_MAP
         else:
-            self.dataset = get_test_dataset()
+            self.labels = TRAIN_QUESTIONS_MAP.keys()
+            self.question_map = TRAIN_QUESTIONS_MAP
+            
 
     def __len__(self):
         return len(self.dataset)
@@ -53,40 +48,65 @@ class CivilDecisionDataset(Dataset):
     def __getitem__(self, index):
         example = self.dataset[index]
 
-        items = []
-        for label_name, question in QUESTIONS_MAP.items():
-            value = example[label_name]
-            if value is None or not math.isfinite(float(value)):
-                # 如果某个标签数据有问题，就跳过
+        state = example['text']
+        questions = []
+        labels = []
+        for label in self.labels:
+            score = example[label]
+            if score is None:
                 continue
-            # 标签、问题、标签评分
-            items.append((label_name, question, float(value)))
+            available_questions = self.question_map[label]
+            selected_questions = random.sample(
+                available_questions,
+                k=2,
+            )
+            questions.extend(selected_questions)
+            labels.extend([score] * len(selected_questions))
+        return {
+            'state': state,
+            'questions': questions,
+            'labels': labels
+        }
 
-        if not items:
-            print(f"[{index}] 取数有问题， 用默认值代替")
-            return ("toxicity", QUESTIONS_MAP["toxicity"], 0.0)
-        
-        random.shuffle(items)
 
-        questions = [item[1] for item in items]
-        targets = [item[2] for item in items]
-        encoded, positions = build_input(
-            example["text"],
-            questions,
+
+class CivilCommentCollector:
+    def __init__(self, tokenizer):
+        self.pad_id = tokenizer.pad_token_id
+        self.tokenizer = tokenizer
+
+    def __call__(self, features):
+        # 给出的形状，是[Q, L]
+        s_list = []
+        q_list = []
+        l_list = []
+        for f in features:
+            state = f["state"]
+            questions = f["questions"]
+            labels = f["labels"]
+            for q,l in zip(questions, labels):
+                s_list.append(state)
+                q_list.append(q)
+                l_list.append(l)
+
+        encoded = self.tokenizer(
+            s_list,
+            q_list,
+            add_special_tokens=True,
+            padding=True,
+            return_tensors="pt",
         )
         return {
-            "input_ids": encoded["input_ids"].squeeze(0),
-            "attention_mask": encoded["attention_mask"].squeeze(0),
-            "decision_positions": positions,
-            "labels": torch.tensor(
-                targets,
-                dtype=torch.float32,
-            ),
+            'input_ids': encoded['input_ids'],
+            'attention_mask': encoded['attention_mask'],
+            'labels': torch.tensor(l_list, dtype=torch.float32),
         }
-            
-            
+
+
+    
 
 
 if __name__ == "__main__":
-    dataset = CivilDecisionDataset()
-    print(dataset[0])
+    dataset = CivilCommentDataset()
+    for item in dataset:
+        print(f"len: {len(item['state'])}")
